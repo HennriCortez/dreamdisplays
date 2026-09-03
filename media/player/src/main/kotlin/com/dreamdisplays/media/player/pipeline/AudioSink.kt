@@ -15,6 +15,41 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import javax.sound.sampled.*
 
+private interface PcmLine {
+    val longFramePosition: Long
+    val bufferSize: Int
+    val available: Int
+    fun start()
+    fun stop()
+    fun flush()
+    fun close()
+    fun write(data: ByteArray, offset: Int, length: Int): Int
+}
+
+private class JavaSoundPcmLine(private val line: SourceDataLine) : PcmLine {
+    override val longFramePosition: Long get() = line.longFramePosition
+    override val bufferSize: Int get() = line.bufferSize
+    override val available: Int get() = line.available()
+    override fun start() = line.start()
+    override fun stop() = line.stop()
+    override fun flush() = line.flush()
+    override fun close() = line.close()
+    override fun write(data: ByteArray, offset: Int, length: Int): Int = line.write(data, offset, length)
+}
+
+private class AndroidPcmLine(private val line: AudioTrackWrapper) : PcmLine {
+    override val longFramePosition: Long get() = line.playbackHeadPosition.toLong() and 0x7FFF_FFFFL
+    override val bufferSize: Int get() = line.bufferSizeInFrames * AudioSink.BYTES_PER_FRAME
+    // AAudio.write() supplies its own blocking back-pressure; there is no Java Sound-style
+    // available-byte query to drive the desktop pacer's backlog calculation.
+    override val available: Int get() = bufferSize
+    override fun start() = line.play()
+    override fun stop() = line.pause()
+    override fun flush() = line.flush()
+    override fun close() = line.release()
+    override fun write(data: ByteArray, offset: Int, length: Int): Int = line.write(data, offset, length)
+}
+
 /**
  * Manages PCM pipeline for `FFmpeg` audio process (owns audio master clock).
  */
@@ -102,7 +137,7 @@ internal class AudioSink(private val debugLabel: String) {
 
         @Volatile
         @JvmField
-        var line: SourceDataLine? = null
+        var line: PcmLine? = null
 
         /** True once live PCM has actually been read from the process (see [AudioSink.sampleClock]). */
         @Volatile
@@ -228,7 +263,7 @@ internal class AudioSink(private val debugLabel: String) {
     }
 
     /** Publishes line as session's clock source (false if session superseded) */
-    private fun publishLine(session: LineSession, ln: SourceDataLine): Boolean {
+    private fun publishLine(session: LineSession, ln: PcmLine): Boolean {
         synchronized(sessionLock) {
             if (current !== session) return false
             session.line = ln
@@ -240,7 +275,7 @@ internal class AudioSink(private val debugLabel: String) {
     private fun owns(session: LineSession): Boolean = current === session
 
     /** Detaches line and clears session (so clock reads unavailable) */
-    private fun retireSession(session: LineSession, ln: SourceDataLine?) {
+    private fun retireSession(session: LineSession, ln: PcmLine?) {
         synchronized(sessionLock) {
             if (session.line === ln) session.line = null
             if (current === session) current = null
@@ -381,7 +416,7 @@ internal class AudioSink(private val debugLabel: String) {
         originKnown: Boolean, catchUp: CatchUp?, shouldPromote: () -> Boolean, onPromoted: () -> Unit,
         onAborted: () -> Unit, stderrBuf: StringBuilder, onUnexpectedEnd: (String) -> Unit,
     ) {
-        var newLine: SourceDataLine? = null
+        var newLine: PcmLine? = null
         var session: LineSession? = null
         var promoted = false
         var pumped = false
@@ -389,13 +424,7 @@ internal class AudioSink(private val debugLabel: String) {
         fun isInterrupted() = terminated.get() || stopFlag.get()
         runCatching {
             proc.inputStream.use { input ->
-                val fmt = pcmFormat()
-                val info = DataLine.Info(SourceDataLine::class.java, fmt)
-                if (!AudioSystem.isLineSupported(info)) {
-                    logger.warn("$debugLabel PCM line not supported (switch).")
-                    return@use
-                }
-                newLine = openLine(info, fmt) ?: run {
+                newLine = openLine() ?: run {
                     logger.warn("$debugLabel [audio] switch line failed to open.")
                     return@use
                 }
@@ -455,7 +484,7 @@ internal class AudioSink(private val debugLabel: String) {
      * Pre-buffers the replacement switch line with leading PCM before it is started (silent).
      */
     private fun primeSwitchLine(
-        input: InputStream, ln: SourceDataLine, terminated: AtomicBoolean, stopFlag: AtomicBoolean,
+        input: InputStream, ln: PcmLine, terminated: AtomicBoolean, stopFlag: AtomicBoolean,
     ): Boolean {
         val chunk = ByteArray(CHUNK_BYTES)
         val primeTarget = paceTargetBytes.coerceIn(CHUNK_BYTES * 3, LINE_BUFFER_BYTES - CHUNK_BYTES)
@@ -540,17 +569,11 @@ internal class AudioSink(private val debugLabel: String) {
         startGate: CountDownLatch?, stderrBuf: StringBuilder, onUnexpectedEnd: (String) -> Unit,
         catchUp: CatchUp? = null,
     ) {
-        var ln: SourceDataLine? = null
+        var ln: PcmLine? = null
         var pumped = false
         runCatching {
             proc.inputStream.use { input ->
-                val fmt = pcmFormat()
-                val info = DataLine.Info(SourceDataLine::class.java, fmt)
-                if (!AudioSystem.isLineSupported(info)) {
-                    logger.warn("$debugLabel PCM line not supported.")
-                    return@runCatching
-                }
-                ln = openLine(info, fmt) ?: run {
+                ln = openLine() ?: run {
                     logger.warn("$debugLabel [audio] line failed to open.")
                     return@runCatching
                 }
@@ -603,18 +626,12 @@ internal class AudioSink(private val debugLabel: String) {
         session: LineSession, prelude: ByteArray, terminated: AtomicBoolean, stopFlag: AtomicBoolean,
         onUnexpectedEnd: (String) -> Unit,
     ) {
-        var ln: SourceDataLine? = null
+        var ln: PcmLine? = null
         var pumped = false
         var stderrBuf: StringBuilder? = null
 
         runCatching {
-            val fmt = pcmFormat()
-            val info = DataLine.Info(SourceDataLine::class.java, fmt)
-            if (!AudioSystem.isLineSupported(info)) {
-                logger.warn("$debugLabel PCM line not supported (bridge).")
-                return@runCatching
-            }
-            ln = openLine(info, fmt) ?: run {
+            ln = openLine() ?: run {
                 logger.warn("$debugLabel [audio] bridge line failed to open.")
                 return@runCatching
             }
@@ -660,14 +677,9 @@ internal class AudioSink(private val debugLabel: String) {
         }
     }
 
-    /** The PCM line format shared by every session: 44.1 kHz stereo signed 16-bit little-endian. */
-    private fun pcmFormat() = AudioFormat(
-        AudioFormat.Encoding.PCM_SIGNED, SAMPLE_RATE.toFloat(), 16, 2, 4, SAMPLE_RATE.toFloat(), false,
-    )
-
     /** Writes the cached bridge prelude to [ln] (volume applied), without ring-caching it. */
     private fun writePrelude(
-        ln: SourceDataLine,
+        ln: PcmLine,
         prelude: ByteArray,
         terminated: AtomicBoolean,
         stopFlag: AtomicBoolean
@@ -728,7 +740,7 @@ internal class AudioSink(private val debugLabel: String) {
 
     /** Reads live PCM from [input] and writes it to [ln], ring-caching each chunk for the next bridge. */
     private fun pumpLive(
-        session: LineSession, input: InputStream, ln: SourceDataLine,
+        session: LineSession, input: InputStream, ln: PcmLine,
         terminated: AtomicBoolean, stopFlag: AtomicBoolean,
     ) {
         val chunk = ByteArray(CHUNK_BYTES)
@@ -772,7 +784,7 @@ internal class AudioSink(private val debugLabel: String) {
      * then resumes the line. The audio `FFmpeg` process blocks on pipe back-pressure meanwhile, staying
      * warm. Returns true only when stop/terminate fired while parked (caller should break the loop).
      */
-    private fun parkIfRequested(ln: SourceDataLine, terminated: AtomicBoolean, stopFlag: AtomicBoolean): Boolean {
+    private fun parkIfRequested(ln: PcmLine, terminated: AtomicBoolean, stopFlag: AtomicBoolean): Boolean {
         val pk = parked ?: return false
         if (!pk.get()) return false
         runCatching { ln.stop() } // Pause playback, keep the buffered tail and the line open
@@ -790,7 +802,7 @@ internal class AudioSink(private val debugLabel: String) {
 
     /** Writes the first [n] bytes of [chunk] to [ln], retrying short writes until stop/terminate. */
     private fun writeFully(
-        ln: SourceDataLine,
+        ln: PcmLine,
         chunk: ByteArray,
         n: Int,
         terminated: AtomicBoolean,
@@ -809,7 +821,7 @@ internal class AudioSink(private val debugLabel: String) {
      * grow.
      */
     private fun paceLiveWrite(
-        ln: SourceDataLine,
+        ln: PcmLine,
         chunk: ByteArray,
         n: Int,
         terminated: AtomicBoolean,
@@ -856,13 +868,25 @@ internal class AudioSink(private val debugLabel: String) {
         return false
     }
 
-    /**
-     * Opens and returns a [SourceDataLine] with the specified format, retrying a few times if the line is temporarily unavailable.
-     */
-    private fun openLine(info: DataLine.Info, fmt: AudioFormat): SourceDataLine? {
+    /** Opens the Android plugin line or a desktop Java Sound line. */
+    private fun openLine(): PcmLine? {
+        val android = System.getProperty("os.version")?.contains("android", ignoreCase = true) == true ||
+                System.getenv("POJAV_FFMPEG_PATH") != null
+        if (android) {
+            repeat(OPEN_RETRIES) { attempt ->
+                AudioTrackWrapper.open(SAMPLE_RATE, LINE_BUFFER_BYTES)?.let { return AndroidPcmLine(it) }
+                if (attempt < OPEN_RETRIES - 1) Thread.sleep(RETRY_DELAY_MS * (attempt + 1))
+            }
+            logger.warn("$debugLabel Android AAudio line unavailable.")
+            return null
+        }
+        val fmt = AudioFormat(
+            AudioFormat.Encoding.PCM_SIGNED, SAMPLE_RATE.toFloat(), 16, 2, 4, SAMPLE_RATE.toFloat(), false,
+        )
+        val info = DataLine.Info(SourceDataLine::class.java, fmt)
         repeat(OPEN_RETRIES) { attempt ->
             try {
-                return (AudioSystem.getLine(info) as SourceDataLine).also { it.open(fmt, LINE_BUFFER_BYTES) }
+                return JavaSoundPcmLine((AudioSystem.getLine(info) as SourceDataLine).also { it.open(fmt, LINE_BUFFER_BYTES) })
             } catch (e: LineUnavailableException) {
                 if (attempt == OPEN_RETRIES - 1) {
                     logger.warn("$debugLabel Line unavailable: ${e.message}.")
