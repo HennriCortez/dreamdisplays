@@ -318,7 +318,7 @@ internal class AudioSink(private val debugLabel: String) {
      */
     fun snapshotPcm(maxBytes: Int): ByteArray {
         if (maxBytes <= 0) return ByteArray(0)
-        val unplayed = current?.line?.let { (it.bufferSize - it.available()).coerceAtLeast(0) } ?: 0
+        val unplayed = current?.line?.let { (it.bufferSize - it.available).coerceAtLeast(0) } ?: 0
         synchronized(pcmRing) {
             // Round both bounds down to a whole stereo 16-bit frame so the slice never starts mid-sample
             // (unplayed comes from the line's byte counters and need not be frame-aligned).
@@ -827,7 +827,7 @@ internal class AudioSink(private val debugLabel: String) {
         terminated: AtomicBoolean,
         stopFlag: AtomicBoolean
     ) {
-        val unplayedBefore = (ln.bufferSize - ln.available()).coerceAtLeast(0)
+        val unplayedBefore = (ln.bufferSize - ln.available).coerceAtLeast(0)
         if (paceStreaming) {
             if (unplayedBefore == 0) {
                 paceTargetBytes = (paceTargetBytes + PACE_STEP_BYTES).coerceAtMost(MAX_PACE_BYTES)
@@ -841,7 +841,7 @@ internal class AudioSink(private val debugLabel: String) {
         paceStreaming = true
         // Hold the backlog at the target: wait for playout to drain the surplus before feeding the next chunk.
         while (!terminated.get() && !stopFlag.get()) {
-            if ((ln.bufferSize - ln.available()).coerceAtLeast(0) <= paceTargetBytes) break
+            if ((ln.bufferSize - ln.available).coerceAtLeast(0) <= paceTargetBytes) break
             try {
                 Thread.sleep(1)
             } catch (_: InterruptedException) {
