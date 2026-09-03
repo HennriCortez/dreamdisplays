@@ -23,7 +23,7 @@ jobs:
   build:
     uses: ./.github/workflows/_build.yml
     with:
-      pull_request: ${{ inputs.pull_request }}
+      pull_request: ${{ github.event.inputs.pull_request == 'true' }}
 
   collect:
     name: Collect build artifacts
