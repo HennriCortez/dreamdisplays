@@ -6,6 +6,7 @@ import com.dreamdisplays.media.runtime.security.MediaHostGuard
 import kotlinx.io.IOException
 import java.util.*
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Builds `FFmpeg` process invocations for the media pipeline and handles their
@@ -17,6 +18,8 @@ object MediaProcess {
 
     /** Kill switch for GPU-side scaling (`-Ddreamdisplays.hwscale=false` falls back to software scale). */
     private val HW_SCALE_ENABLED = System.getProperty("dreamdisplays.hwscale", "true").toBoolean()
+
+    private val backendLogShown = AtomicBoolean(false)
 
     /** Frame rate assumed when the source reports none, or reports something implausible. */
     const val DEFAULT_OUTPUT_FPS = 30.0
@@ -222,10 +225,14 @@ object MediaProcess {
             addAll(listOf("-hide_banner", "-loglevel", "error", "-nostats"))
             addAll(listOf("-protocol_whitelist", "https,tls,tcp,crypto,data,http"))
             if (hwAccel.ffmpegName != null) {
-                println("[MediaProcess] Initializing FFmpeg with hardware acceleration: ${hwAccel.name} (codec: ${hwAccel.ffmpegName})")
+                if (backendLogShown.compareAndSet(false, true)) {
+                    println("[MediaProcess] Initializing FFmpeg with hardware acceleration: ${hwAccel.name} (codec: ${hwAccel.ffmpegName})")
+                }
                 addAll(listOf("-hwaccel", hwAccel.ffmpegName))
             } else {
-                println("[MediaProcess] Initializing FFmpeg with software decoding (NONE)")
+                if (backendLogShown.compareAndSet(false, true)) {
+                    println("[MediaProcess] Initializing FFmpeg with software decoding (NONE)")
+                }
             }
             hwAccel.hwOutputFormat?.let { addAll(listOf("-hwaccel_output_format", it)) }
             if (trimmed == null) {

@@ -107,15 +107,20 @@ enum class HwAccelBackend(val ffmpegName: String?, val hwOutputFormat: String?, 
          * Linux            → [VAAPI]
          * Unknown          → [NONE]
          */
-        fun detectDefault(): HwAccelBackend = when {
-            // The guest JVM and FFmpeg subprocess cannot create or receive an Android Surface.
-            // Keep Android on software decoding until a launcher-provided Surface bridge exists.
-            isAndroid -> NONE
-            OsInfo.isMac     -> VIDEOTOOLBOX
-            OsInfo.isWindows -> D3D11VA
-            OsInfo.isLinux   -> VAAPI
-            else             -> NONE
+        private val detectedDefault: HwAccelBackend by lazy {
+            when {
+                // The guest JVM and FFmpeg subprocess cannot create or receive an Android Surface.
+                // Keep Android on software decoding until a launcher-provided Surface bridge exists.
+                isAndroid -> NONE
+                OsInfo.isMac     -> VIDEOTOOLBOX
+                OsInfo.isWindows -> D3D11VA
+                OsInfo.isLinux   -> VAAPI
+                else             -> NONE
+            }
         }
+
+        /** Returns the platform backend selected once for this JVM. */
+        fun detectDefault(): HwAccelBackend = detectedDefault
 
         // ---------------------------------------------------------------------------------
         // Fallback chain
