@@ -6,6 +6,8 @@ import com.sun.jna.Native
 import com.sun.jna.Pointer
 import org.slf4j.LoggerFactory
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.locks.ReentrantReadWriteLock
+import kotlin.concurrent.withLock
 
 /**
  * Drop-in replacement for the old AudioTrack / OpenAL wrapper.
@@ -28,7 +30,7 @@ import java.util.concurrent.atomic.AtomicBoolean
  */
 internal class AudioTrackWrapper private constructor(private val handle: Pointer, private val api: AAudioApi) {
     private val released = AtomicBoolean(false)
-    private val nativeLock = Any()
+    private val nativeLock = ReentrantReadWriteLock()
 
     // ── AudioSink-facing API (mirrors the old AudioTrack surface) ────────────
 
@@ -37,13 +39,13 @@ internal class AudioTrackWrapper private constructor(private val handle: Pointer
      * Replaces `AudioTrack.bufferSizeInFrames`.
      */
     val bufferSizeInFrames: Int
-        get() = synchronized(nativeLock) {
+        get() = nativeLock.readLock().withLock {
             if (released.get()) 0 else api.aaudio_buffer_size(handle)
         }
 
     /** Total frames written to the sink, used as the low-overhead playback clock. */
     val playbackHeadPosition: Int
-        get() = synchronized(nativeLock) {
+        get() = nativeLock.readLock().withLock {
             if (released.get()) 0 else (api.aaudio_frames_written(handle) and 0x7FFF_FFFFL).toInt()
         }
 
@@ -53,7 +55,7 @@ internal class AudioTrackWrapper private constructor(private val handle: Pointer
      * for callers who want a more accurate clock than the frame-count estimate.
      */
     val timestampNanos: Long
-        get() = synchronized(nativeLock) {
+        get() = nativeLock.readLock().withLock {
             if (released.get()) -1L
             else {
                 val position = longArrayOf(0L)
@@ -63,10 +65,10 @@ internal class AudioTrackWrapper private constructor(private val handle: Pointer
         }
 
     /** Start / resume playback.  Replaces `AudioTrack.play()`. */
-    fun play() { synchronized(nativeLock) { if (!released.get()) api.aaudio_resume(handle) } }
+    fun play() { nativeLock.readLock().withLock { if (!released.get()) api.aaudio_resume(handle) } }
 
     /** Pause playback without discarding buffered audio.  Replaces `AudioTrack.stop()` (soft-pause). */
-    fun pause() { synchronized(nativeLock) { if (!released.get()) api.aaudio_pause(handle) } }
+    fun pause() { nativeLock.readLock().withLock { if (!released.get()) api.aaudio_pause(handle) } }
 
     /**
      * Discard all buffered audio immediately.
@@ -74,14 +76,14 @@ internal class AudioTrackWrapper private constructor(private val handle: Pointer
      * After a flush the frame counter resets — callers must reset their own
      * wrap-state too (AudioSink already does this before every flush call).
      */
-    fun flush() { synchronized(nativeLock) { if (!released.get()) api.aaudio_flush(handle) } }
+    fun flush() { nativeLock.readLock().withLock { if (!released.get()) api.aaudio_flush(handle) } }
 
     /**
      * Write up to [length] bytes from [audioData] starting at [offsetInBytes].
      * Returns the number of bytes consumed (≥ 0) or a negative error code.
      * Replaces `AudioTrack.write(byte[], int, int)`.
      */
-    fun write(audioData: ByteArray, offsetInBytes: Int, sizeInBytes: Int): Int = synchronized(nativeLock) {
+    fun write(audioData: ByteArray, offsetInBytes: Int, sizeInBytes: Int): Int = nativeLock.readLock().withLock {
         if (released.get() || sizeInBytes <= 0) 0 else {
             val data = if (offsetInBytes == 0 && sizeInBytes == audioData.size) audioData
             else audioData.copyOfRange(offsetInBytes, offsetInBytes + sizeInBytes)
@@ -95,7 +97,7 @@ internal class AudioTrackWrapper private constructor(private val handle: Pointer
      * Replaces `AudioTrack.release()`.  Must not be called more than once.
      */
     fun release() {
-        synchronized(nativeLock) {
+        nativeLock.writeLock().withLock {
             if (released.compareAndSet(false, true)) api.aaudio_close(handle)
         }
     }
