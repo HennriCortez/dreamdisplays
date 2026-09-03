@@ -28,6 +28,7 @@ import java.util.concurrent.atomic.AtomicBoolean
  */
 internal class AudioTrackWrapper private constructor(private val handle: Pointer, private val api: AAudioApi) {
     private val released = AtomicBoolean(false)
+    private val nativeLock = Any()
 
     // ── AudioSink-facing API (mirrors the old AudioTrack surface) ────────────
 
@@ -36,7 +37,9 @@ internal class AudioTrackWrapper private constructor(private val handle: Pointer
      * Replaces `AudioTrack.bufferSizeInFrames`.
      */
     val bufferSizeInFrames: Int
-        get() = if (released.get()) 0 else api.aaudio_buffer_size(handle)
+        get() = synchronized(nativeLock) {
+            if (released.get()) 0 else api.aaudio_buffer_size(handle)
+        }
 
     /**
      * Total frames written to the sink so far (monotonically increasing).
@@ -51,13 +54,13 @@ internal class AudioTrackWrapper private constructor(private val handle: Pointer
      * which is exactly what AudioSink computes when headWraps == 0.
      */
     val playbackHeadPosition: Int
-        get() {
+        get() = synchronized(nativeLock) {
             // AudioSink's wrap logic treats this as a signed 32-bit counter.
             // aaudio_frames_written is 64-bit; we truncate to 32 bits here so
             // the existing wrap-detection in AudioSink still triggers correctly
             // for very long sessions (>27 h at 44.1 kHz).  For normal use the
             // value stays well within 32-bit range.
-            return if (released.get()) 0 else (api.aaudio_frames_written(handle) and 0x7FFF_FFFFL).toInt()
+            if (released.get()) 0 else (api.aaudio_frames_written(handle) and 0x7FFF_FFFFL).toInt()
         }
 
     /**
@@ -66,18 +69,20 @@ internal class AudioTrackWrapper private constructor(private val handle: Pointer
      * for callers who want a more accurate clock than the frame-count estimate.
      */
     val timestampNanos: Long
-        get() {
-            if (released.get()) return -1L
-            val position = longArrayOf(0L)
-            val nanos = longArrayOf(0L)
-            return if (api.aaudio_get_timestamp(handle, position, nanos) == 0) nanos[0] else -1L
+        get() = synchronized(nativeLock) {
+            if (released.get()) -1L
+            else {
+                val position = longArrayOf(0L)
+                val nanos = longArrayOf(0L)
+                if (api.aaudio_get_timestamp(handle, position, nanos) == 0) nanos[0] else -1L
+            }
         }
 
     /** Start / resume playback.  Replaces `AudioTrack.play()`. */
-    fun play() { if (!released.get()) api.aaudio_resume(handle) }
+    fun play() { synchronized(nativeLock) { if (!released.get()) api.aaudio_resume(handle) } }
 
     /** Pause playback without discarding buffered audio.  Replaces `AudioTrack.stop()` (soft-pause). */
-    fun pause() { if (!released.get()) api.aaudio_pause(handle) }
+    fun pause() { synchronized(nativeLock) { if (!released.get()) api.aaudio_pause(handle) } }
 
     /**
      * Discard all buffered audio immediately.
@@ -85,27 +90,30 @@ internal class AudioTrackWrapper private constructor(private val handle: Pointer
      * After a flush the frame counter resets — callers must reset their own
      * wrap-state too (AudioSink already does this before every flush call).
      */
-    fun flush() { if (!released.get()) api.aaudio_flush(handle) }
+    fun flush() { synchronized(nativeLock) { if (!released.get()) api.aaudio_flush(handle) } }
 
     /**
      * Write up to [length] bytes from [audioData] starting at [offsetInBytes].
      * Returns the number of bytes consumed (≥ 0) or a negative error code.
      * Replaces `AudioTrack.write(byte[], int, int)`.
      */
-    fun write(audioData: ByteArray, offsetInBytes: Int, sizeInBytes: Int): Int =
+    fun write(audioData: ByteArray, offsetInBytes: Int, sizeInBytes: Int): Int = synchronized(nativeLock) {
         if (released.get() || sizeInBytes <= 0) 0 else {
             val data = if (offsetInBytes == 0 && sizeInBytes == audioData.size) audioData
             else audioData.copyOfRange(offsetInBytes, offsetInBytes + sizeInBytes)
             api.aaudio_write(handle, data, data.size / AudioSink.BYTES_PER_FRAME, 100_000_000L)
                 .coerceAtLeast(0) * AudioSink.BYTES_PER_FRAME
         }
+    }
 
     /**
      * Stop playback and release all native resources.
      * Replaces `AudioTrack.release()`.  Must not be called more than once.
      */
     fun release() {
-        if (released.compareAndSet(false, true)) api.aaudio_close(handle)
+        synchronized(nativeLock) {
+            if (released.compareAndSet(false, true)) api.aaudio_close(handle)
+        }
     }
 
     // ── Static factory ───────────────────────────────────────────────────────

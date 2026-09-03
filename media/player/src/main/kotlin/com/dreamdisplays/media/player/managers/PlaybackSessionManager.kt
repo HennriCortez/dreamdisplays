@@ -20,6 +20,7 @@ import com.dreamdisplays.media.player.util.MediaUtil
 import com.dreamdisplays.media.player.util.daemon
 import com.dreamdisplays.media.player.util.joinSafely
 import com.dreamdisplays.media.runtime.security.MediaHostGuard
+import com.dreamdisplays.util.OsInfo
 import kotlinx.io.IOException
 import org.slf4j.LoggerFactory
 import java.nio.ByteBuffer
@@ -67,6 +68,12 @@ internal class PlaybackSessionManager(
 ) {
     /** Logger. */
     private val logger = LoggerFactory.getLogger(javaClass)
+
+    private val isAndroid = OsInfo.isLinux && (
+        System.getProperty("os.version")?.contains("android", ignoreCase = true) == true ||
+            System.getenv("POJAV_NATIVEDIR") != null ||
+            System.getenv("POJAV_FFMPEG_PATH") != null
+        )
 
     private companion object {
         /** Pacing cadence for replay-only video; PTS still drives pacing, this is only the fallback. */
@@ -255,7 +262,10 @@ internal class PlaybackSessionManager(
         debugLabel = debugLabel,
         terminated = terminated,
         positionNanos = { clock.currentTime() },
-        eligible = { isPlaying && !terminated.get() && !parkFlag.get() && audioOriginKnown() },
+        eligible = {
+            isPlaying && !terminated.get() && !parkFlag.get() && audioOriginKnown() &&
+                    !isAndroid
+        },
     )
 
     /** Declares the audio tracks to keep pre-warmed; the one currently playing must not be among them. */
