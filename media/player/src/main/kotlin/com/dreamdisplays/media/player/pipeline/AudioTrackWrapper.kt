@@ -41,17 +41,10 @@ internal class AudioTrackWrapper private constructor(private val handle: Pointer
             if (released.get()) 0 else api.aaudio_buffer_size(handle)
         }
 
-    /** Hardware frames already rendered, exposed through AAudio's timestamp API. */
+    /** Total frames written to the sink, used as the low-overhead playback clock. */
     val playbackHeadPosition: Int
         get() = synchronized(nativeLock) {
-            if (released.get()) 0
-            else {
-                val position = longArrayOf(0L)
-                val nanos = longArrayOf(0L)
-                val result = api.aaudio_get_timestamp(handle, position, nanos)
-                val frames = if (result == 0) position[0] else api.aaudio_frames_written(handle)
-                (frames and 0x7FFF_FFFFL).toInt()
-            }
+            if (released.get()) 0 else (api.aaudio_frames_written(handle) and 0x7FFF_FFFFL).toInt()
         }
 
     /**
