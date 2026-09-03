@@ -41,26 +41,17 @@ internal class AudioTrackWrapper private constructor(private val handle: Pointer
             if (released.get()) 0 else api.aaudio_buffer_size(handle)
         }
 
-    /**
-     * Total frames written to the sink so far (monotonically increasing).
-     * Replaces `AudioTrack.playbackHeadPosition` — but unlike the 32-bit
-     * AudioTrack counter this is a full 64-bit value, so [AudioSink]'s
-     * wrap-detection arithmetic (`headWraps`) will always see a delta of 0
-     * and never increment the wrap counter.  The clock formula therefore
-     * simplifies to:
-     *
-     *   live = framesWritten - preludeFrames
-     *
-     * which is exactly what AudioSink computes when headWraps == 0.
-     */
+    /** Hardware frames already rendered, exposed through AAudio's timestamp API. */
     val playbackHeadPosition: Int
         get() = synchronized(nativeLock) {
-            // AudioSink's wrap logic treats this as a signed 32-bit counter.
-            // aaudio_frames_written is 64-bit; we truncate to 32 bits here so
-            // the existing wrap-detection in AudioSink still triggers correctly
-            // for very long sessions (>27 h at 44.1 kHz).  For normal use the
-            // value stays well within 32-bit range.
-            if (released.get()) 0 else (api.aaudio_frames_written(handle) and 0x7FFF_FFFFL).toInt()
+            if (released.get()) 0
+            else {
+                val position = longArrayOf(0L)
+                val nanos = longArrayOf(0L)
+                val result = api.aaudio_get_timestamp(handle, position, nanos)
+                val frames = if (result == 0) position[0] else api.aaudio_frames_written(handle)
+                (frames and 0x7FFF_FFFFL).toInt()
+            }
         }
 
     /**
