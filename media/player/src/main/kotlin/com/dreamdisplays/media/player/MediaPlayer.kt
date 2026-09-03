@@ -29,6 +29,7 @@ import com.dreamdisplays.media.player.stream.MediaStreamSelector
 import com.dreamdisplays.media.player.util.MediaUtil
 import com.dreamdisplays.media.player.util.daemon
 import com.dreamdisplays.media.runtime.security.MediaHostGuard
+import com.dreamdisplays.util.OsInfo
 import org.slf4j.LoggerFactory
 import java.nio.ByteBuffer
 import java.util.concurrent.*
@@ -803,7 +804,9 @@ class MediaPlayer(
 
     /** The hardware decode backend for new sessions, honoring config and the per-stream software fallback. */
     private fun currentHwAccel(): HwAccelBackend =
-        if (env.config.useHwAccel && !hwAccelDisabled) HwAccelBackend.detectDefault() else HwAccelBackend.NONE
+        if (OsInfo.isAndroid || (env.config.useHwAccel && !hwAccelDisabled)) {
+            HwAccelBackend.detectDefault()
+        } else HwAccelBackend.NONE
 
     /**
      * Stops watchdog and session.
@@ -818,7 +821,7 @@ class MediaPlayer(
      */
     private fun handleStreamEnd(stderr: String, normalEos: Boolean) {
         if (terminated.get()) return
-        if (!hwAccelDisabled && !normalEos && !clock.isRunning
+        if (!OsInfo.isAndroid && !hwAccelDisabled && !normalEos && !clock.isRunning
             && System.nanoTime() - sessionStartNanos < HWACCEL_FAIL_WINDOW_NS
             && HwAccelBackend.looksLikeHwAccelFailure(stderr)
         ) {

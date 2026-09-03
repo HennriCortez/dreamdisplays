@@ -5,6 +5,7 @@ import java.io.File
 val nativePlatformKeys = listOf(
     "linux-x64",
     "linux-aarch64",
+    "android-arm64",
     "macos-x64",
     "macos-aarch64",
     "windows-x64",

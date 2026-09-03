@@ -702,6 +702,7 @@ internal class NativeVideoFramePipe(
             "d3d11va", "d3d11" -> HwAccelBackend.D3D11VA.lavCode
             "vaapi" -> HwAccelBackend.VAAPI.lavCode
             "cuda", "nvdec" -> HwAccelBackend.CUDA.lavCode
+            "mediacodec" -> HwAccelBackend.MEDIACODEC.lavCode
             "none", "software", "sw" -> HwAccelBackend.NONE.lavCode
             else -> hwAccel.lavCode
         }

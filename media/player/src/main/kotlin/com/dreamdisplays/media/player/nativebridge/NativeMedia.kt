@@ -94,7 +94,8 @@ object NativeMedia {
 
     /** In-process decode (libavformat / libavcodec in `dreamdisplays_lav`). */
     val lavInProcessEnabled: Boolean
-        get() = yuvGpuEnabled
+        get() = !OsInfo.isAndroid
+            && yuvGpuEnabled
                 && System.getProperty("dreamdisplays.native.libav", "true").toBoolean()
                 && lavAvailable
 
@@ -599,6 +600,7 @@ object NativeMedia {
     private fun platformKey(): String = when {
         OsInfo.isWindows -> if (OsInfo.isArm) "windows-aarch64" else "windows-x64"
         OsInfo.isMac -> if (OsInfo.isArm) "macos-aarch64" else "macos-x64"
+        OsInfo.isAndroid -> "android-arm64"
         else -> if (OsInfo.isArm) "linux-aarch64" else "linux-x64"
     }
 

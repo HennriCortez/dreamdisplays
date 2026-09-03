@@ -16,6 +16,12 @@ object FFmpegBinary {
     private val logger = LoggerFactory.getLogger(javaClass)
     private const val CACHE_ROOT = "./dreamdisplays/ffmpeg"
     private const val BTBN_BASE = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest"
+    private const val ANDROID_PATH_PROPERTY = "dreamdisplays.ffmpeg.android.path"
+    private const val ANDROID_RESOURCE = "/dreamdisplays-ffmpeg/android-arm64/ffmpeg"
+    private const val ANDROID_RESOURCE_LIB_DIR = "/dreamdisplays-ffmpeg/android-arm64/lib"
+
+    @Volatile
+    private var androidLibraryDirectory: File? = null
 
     @Volatile
     private var cachedPath: String? = null
@@ -49,6 +55,8 @@ object FFmpegBinary {
      * and falls back to the system `FFmpeg` on any failure.
      */
     private fun resolve(): String? {
+        if (OsInfo.isAndroid) return resolveAndroid()
+
         val p = detectPlatform() ?: run {
             logger.warn("No bundled binary URL for this OS / arch; trying system FFmpeg.")
             return findSystemFfmpeg()
@@ -78,6 +86,103 @@ object FFmpegBinary {
             logger.error("Download failed, falling back to system ffmpeg", e)
             findSystemFfmpeg()
         }
+    }
+
+    /** Resolves an app-provided Android executable; Android must use a build compiled with MediaCodec. */
+    private fun resolveAndroid(): String? {
+        val configured = System.getProperty(ANDROID_PATH_PROPERTY)?.trim().orEmpty()
+        val binary = if (configured.isNotEmpty()) {
+            File(configured).also { androidLibraryDirectory = File(it.parentFile, "lib") }
+        } else extractAndroidResource()
+        if (binary == null) {
+            logger.error("Android FFmpeg is missing; provide -D$ANDROID_PATH_PROPERTY or package the Android ARM64 resource.")
+            return null
+        }
+        if (!binary.isFile || binary.length() == 0L) {
+            logger.error("Configured Android FFmpeg does not exist or is empty: ${binary.absolutePath}.")
+            return null
+        }
+        Processes.markExecutable(binary.toPath())
+        if (!supportsMediaCodec(binary.absolutePath)) {
+            logger.error("Android FFmpeg does not provide the required MediaCodec hardware backend.")
+            return null
+        }
+        logger.info("Using Android FFmpeg with MediaCodec: ${binary.absolutePath}.")
+        return binary.absolutePath
+    }
+
+    private fun extractAndroidResource(): File? {
+        val destination = File("$CACHE_ROOT/android-arm64/ffmpeg")
+        val libraryDirectory = File(destination.parentFile, "lib")
+        javaClass.getResourceAsStream(ANDROID_RESOURCE)?.use { input ->
+            val bytes = input.readBytes()
+            if (bytes.isEmpty()) return null
+            val parent = destination.parentFile
+            if (!parent.exists() && !parent.mkdirs()) return null
+            if (!destination.isFile || destination.length() != bytes.size.toLong()) {
+                val temporary = File(parent, "ffmpeg.tmp")
+                temporary.writeBytes(bytes)
+                if (!temporary.renameTo(destination)) {
+                    temporary.delete()
+                    return null
+                }
+            }
+            extractAndroidLibraries(libraryDirectory)
+            androidLibraryDirectory = libraryDirectory
+            return destination
+        }
+        return null
+    }
+
+    private fun extractAndroidLibraries(destination: File): Boolean {
+        if (!destination.exists() && !destination.mkdirs()) return false
+        var extracted = false
+        for (name in ANDROID_FFMPEG_LIBRARIES) {
+            val resource = "$ANDROID_RESOURCE_LIB_DIR/$name"
+            javaClass.getResourceAsStream(resource)?.use { input ->
+                val file = File(destination, name)
+                val bytes = input.readBytes()
+                if (bytes.isEmpty()) return@use
+                if (!file.isFile || file.length() != bytes.size.toLong()) file.writeBytes(bytes)
+                extracted = true
+            }
+        }
+        return extracted
+    }
+
+    /** Adds the extracted Android FFmpeg shared-library directory to a process environment. */
+    internal fun configureProcess(processBuilder: ProcessBuilder): ProcessBuilder {
+        if (!OsInfo.isAndroid) return processBuilder
+        androidLibraryDirectory?.let { dir ->
+            val existing = processBuilder.environment()["LD_LIBRARY_PATH"].orEmpty()
+            processBuilder.environment()["LD_LIBRARY_PATH"] =
+                if (existing.isEmpty()) dir.absolutePath else "${dir.absolutePath}${File.pathSeparator}$existing"
+        }
+        return processBuilder
+    }
+
+    private val ANDROID_FFMPEG_LIBRARIES = listOf(
+        "libavcodec.so", "libavdevice.so", "libavfilter.so", "libavformat.so",
+        "libavutil.so", "libpostproc.so", "libswresample.so", "libswscale.so",
+    )
+
+    /** Android playback is hardware-only; reject binaries that were built without MediaCodec. */
+    private fun supportsMediaCodec(binary: String): Boolean = runCatching {
+        val process = configureProcess(ProcessBuilder(binary, "-hide_banner", "-hwaccels"))
+            .redirectErrorStream(true)
+            .start()
+        val output = process.inputStream.bufferedReader().use { it.readText() }
+        val finished = process.waitFor(5, TimeUnit.SECONDS)
+        val supported = finished && process.exitValue() == 0 && output.lineSequence().any {
+            it.trim().equals("mediacodec", ignoreCase = true)
+        }
+        if (!supported) {
+            logger.error("Android FFmpeg MediaCodec probe failed (exit=${if (finished) process.exitValue() else "timeout"}). Output: ${output.take(4096)}")
+        }
+        supported
+    }.getOrElse { e ->
+        logger.warn("Could not probe Android FFmpeg MediaCodec support.", e)
+        false
     }
 
     /** Downloads the archive for [p] to a temp file, extracts the binary to [destBinary], and cleans up the temp file. */
@@ -175,6 +280,7 @@ object FFmpegBinary {
     private fun detectPlatform(): Platform? {
         val isArm = OsInfo.isArm
         return when {
+            OsInfo.isAndroid -> null
             OsInfo.isWindows -> if (isArm) null else
                 Platform(
                     "windows-x64",

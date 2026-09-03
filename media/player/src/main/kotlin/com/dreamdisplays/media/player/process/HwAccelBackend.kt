@@ -21,6 +21,9 @@ enum class HwAccelBackend(val ffmpegName: String?, val hwOutputFormat: String?, 
     /** NVIDIA CUDA / NVDEC are fastest on NVIDIA, but limited to NVIDIA cards. */
     CUDA("cuda", "cuda", 5),
 
+    /** Android hardware codecs exposed by the Android MediaCodec API. */
+    MEDIACODEC("mediacodec", null, 6),
+
     /** Software decoding only. */
     NONE(null, null, 0);
 
@@ -31,6 +34,7 @@ enum class HwAccelBackend(val ffmpegName: String?, val hwOutputFormat: String?, 
          * decode is worse than a stream that decodes a bit slower.
          */
         fun detectDefault(): HwAccelBackend = when {
+            OsInfo.isAndroid -> MEDIACODEC
             OsInfo.isMac -> VIDEOTOOLBOX
             OsInfo.isWindows -> D3D11VA
             OsInfo.isLinux -> VAAPI
@@ -55,6 +59,7 @@ enum class HwAccelBackend(val ffmpegName: String?, val hwOutputFormat: String?, 
             "cuda",
             "cuvid",
             "nvdec",
+            "mediacodec",
             "hardware acceleration",
             "failed setup for format",
             "no device available",

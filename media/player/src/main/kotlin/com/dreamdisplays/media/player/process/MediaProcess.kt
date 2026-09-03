@@ -68,11 +68,11 @@ object MediaProcess {
         ffmpeg: String, url: String, w: Int, h: Int, offsetNanos: Long, hwAccel: HwAccelBackend, fps: Double,
         alreadyResolved: Boolean = false, seekByDecoding: Boolean = false,
     ): Process =
-        ProcessBuilder(
+        FFmpegBinary.configureProcess(ProcessBuilder(
             videoArgs(
                 ffmpeg, url, w, h, offsetNanos, hwAccel, VideoTransport.PPM, fps, alreadyResolved, seekByDecoding,
             ),
-        ).start()
+        )).start()
 
     /** Builds full FFmpeg argv for video session emitting [transport] on stdout. Used by native pipeline directly. */
     fun videoArgs(
@@ -131,7 +131,7 @@ object MediaProcess {
                 )
             )
         }
-        return ProcessBuilder(cmd).start()
+        return FFmpegBinary.configureProcess(ProcessBuilder(cmd)).start()
     }
 
     /**
@@ -147,7 +147,7 @@ object MediaProcess {
         ).apply {
             addAll(listOf("-vn", "-f", "s16le", "-ar", sampleRate.toString(), "-ac", "2", "-"))
         }
-        return ProcessBuilder(cmd).start()
+        return FFmpegBinary.configureProcess(ProcessBuilder(cmd)).start()
     }
 
     /** Builds `FFmpeg` process that decodes audio from MPEG-TS piped to stdin. */
@@ -160,7 +160,7 @@ object MediaProcess {
             "-f", "mpegts", "-i", "pipe:0",
             "-vn", "-f", "s16le", "-ar", sampleRate.toString(), "-ac", "2", "-",
         )
-        return ProcessBuilder(cmd).start()
+        return FFmpegBinary.configureProcess(ProcessBuilder(cmd)).start()
     }
 
     /**

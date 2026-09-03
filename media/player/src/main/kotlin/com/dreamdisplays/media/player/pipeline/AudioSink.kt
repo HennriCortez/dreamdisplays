@@ -13,7 +13,10 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
-import javax.sound.sampled.*
+import javax.sound.sampled.AudioFormat
+import javax.sound.sampled.LineUnavailableException
+
+private typealias SourceDataLine = PcmLine
 
 /**
  * Manages PCM pipeline for `FFmpeg` audio process (owns audio master clock).
@@ -390,12 +393,7 @@ internal class AudioSink(private val debugLabel: String) {
         runCatching {
             proc.inputStream.use { input ->
                 val fmt = pcmFormat()
-                val info = DataLine.Info(SourceDataLine::class.java, fmt)
-                if (!AudioSystem.isLineSupported(info)) {
-                    logger.warn("$debugLabel PCM line not supported (switch).")
-                    return@use
-                }
-                newLine = openLine(info, fmt) ?: run {
+                newLine = openLine(fmt) ?: run {
                     logger.warn("$debugLabel [audio] switch line failed to open.")
                     return@use
                 }
@@ -545,12 +543,7 @@ internal class AudioSink(private val debugLabel: String) {
         runCatching {
             proc.inputStream.use { input ->
                 val fmt = pcmFormat()
-                val info = DataLine.Info(SourceDataLine::class.java, fmt)
-                if (!AudioSystem.isLineSupported(info)) {
-                    logger.warn("$debugLabel PCM line not supported.")
-                    return@runCatching
-                }
-                ln = openLine(info, fmt) ?: run {
+                ln = openLine(fmt) ?: run {
                     logger.warn("$debugLabel [audio] line failed to open.")
                     return@runCatching
                 }
@@ -609,12 +602,7 @@ internal class AudioSink(private val debugLabel: String) {
 
         runCatching {
             val fmt = pcmFormat()
-            val info = DataLine.Info(SourceDataLine::class.java, fmt)
-            if (!AudioSystem.isLineSupported(info)) {
-                logger.warn("$debugLabel PCM line not supported (bridge).")
-                return@runCatching
-            }
-            ln = openLine(info, fmt) ?: run {
+            ln = openLine(fmt) ?: run {
                 logger.warn("$debugLabel [audio] bridge line failed to open.")
                 return@runCatching
             }
@@ -859,10 +847,10 @@ internal class AudioSink(private val debugLabel: String) {
     /**
      * Opens and returns a [SourceDataLine] with the specified format, retrying a few times if the line is temporarily unavailable.
      */
-    private fun openLine(info: DataLine.Info, fmt: AudioFormat): SourceDataLine? {
+    private fun openLine(fmt: AudioFormat): SourceDataLine? {
         repeat(OPEN_RETRIES) { attempt ->
             try {
-                return (AudioSystem.getLine(info) as SourceDataLine).also { it.open(fmt, LINE_BUFFER_BYTES) }
+                return openPcmLine(fmt, LINE_BUFFER_BYTES)
             } catch (e: LineUnavailableException) {
                 if (attempt == OPEN_RETRIES - 1) {
                     logger.warn("$debugLabel Line unavailable: ${e.message}.")
