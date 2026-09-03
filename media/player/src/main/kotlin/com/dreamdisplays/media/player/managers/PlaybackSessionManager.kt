@@ -749,7 +749,7 @@ internal class PlaybackSessionManager(
         if (audioPcm != null && audioPcm.size >= AudioSink.BYTES_PER_FRAME) {
             val aStop = AtomicBoolean()
             val at = audio.startBridge(
-                audioPcm, liveEdgeNanos, resumeNanos, terminated, aStop, onUnexpectedEnd = onAudioFailure,
+                audioPcm, liveEdgeNanos, terminated, aStop, onUnexpectedEnd = onAudioFailure,
             )
             bridgeAudio = AudioHalf(null, at, aStop)
         }

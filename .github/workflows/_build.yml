@@ -9,6 +9,14 @@ on:
         description: When true, trim to a single native platform (PR code-correctness run).
         type: boolean
         default: false
+      minecraft_version:
+        description: Optional single Minecraft version to build.
+        type: string
+        default: ''
+      fabric_only:
+        description: When true, build only the Fabric loader.
+        type: boolean
+        default: false
     outputs:
       version:
         value: ${{ jobs.metadata.outputs.version }}
@@ -60,6 +68,8 @@ jobs:
         id: stonecutter_versions
         env:
           IS_PR: ${{ inputs.pull_request }}
+          TARGET_VERSION: ${{ inputs.minecraft_version }}
+          FABRIC_ONLY: ${{ inputs.fabric_only }}
         run: |
           python3 - <<'EOF'
           import json, os
@@ -138,9 +148,12 @@ jobs:
               },
           ]
           is_pull_request = os.environ.get("IS_PR") == "true"
-          build_versions = versions
-          required_native_platforms = ["linux-x64"] if is_pull_request else [item["platform"] for item in native_matrix]
-          selected_native_matrix = [native_matrix[0]] if is_pull_request else native_matrix
+          target_version = os.environ.get("TARGET_VERSION", "").strip()
+          if target_version and target_version not in versions:
+              raise SystemExit(f"Requested Minecraft version is not present in versions.json: {target_version}")
+          build_versions = [target_version] if target_version else versions
+          required_native_platforms = ["linux-x64"] if is_pull_request or target_version else [item["platform"] for item in native_matrix]
+          selected_native_matrix = [native_matrix[0]] if is_pull_request or target_version else native_matrix
 
           with open(os.environ["GITHUB_OUTPUT"], "a") as f:
               f.write(f"versions_json={json.dumps(versions)}\n")
@@ -601,14 +614,19 @@ jobs:
 
       - name: Build loaders with Gradle
         run: |
-          ./gradlew \
-            :platform:client:fabric:publishJar \
-            :platform:client:neoforge:shadowJar \
-            --no-daemon \
-            --parallel
+          if [[ "${BUILD_FABRIC_ONLY}" == "true" ]]; then
+            ./gradlew :platform:client:fabric:publishJar --no-daemon --parallel
+          else
+            ./gradlew \
+              :platform:client:fabric:publishJar \
+              :platform:client:neoforge:shadowJar \
+              --no-daemon \
+              --parallel
+          fi
         env:
           DREAMDISPLAYS_REQUIRE_NATIVES: "true"
           DREAMDISPLAYS_REQUIRED_NATIVE_PLATFORMS: ${{ needs.metadata.outputs.required_native_platforms }}
+          BUILD_FABRIC_ONLY: ${{ inputs.fabric_only }}
           GRADLE_OPTS: -Dorg.gradle.daemon=false -Dorg.gradle.parallel=true -Xmx4G
 
       # The Paper jar is one cross-version artifact built only in the paper_build_version job
@@ -668,7 +686,8 @@ jobs:
               for name in (native_name(platform), lav_name(platform), "licenses/ffmpeg-license.txt")
           ]
 
-          for loader in ("fabric", "neoforge"):
+          loaders = ("fabric",) if os.environ.get("BUILD_FABRIC_ONLY") == "true" else ("fabric", "neoforge")
+          for loader in loaders:
               jar = Path(f"build/libs/dreamdisplays-{loader}-{mc}-{version}.jar")
               if not jar.is_file():
                   raise SystemExit(f"Missing jar: {jar}")
@@ -695,6 +714,7 @@ jobs:
           EOF
         env:
           REQUIRED_NATIVE_PLATFORMS: ${{ needs.metadata.outputs.required_native_platforms }}
+          BUILD_FABRIC_ONLY: ${{ inputs.fabric_only }}
 
       - name: Collect artifacts
         run: |

@@ -24,6 +24,8 @@ jobs:
     uses: ./.github/workflows/_build.yml
     with:
       pull_request: ${{ github.event.inputs.pull_request == 'true' }}
+      minecraft_version: 26.2
+      fabric_only: true
 
   collect:
     name: Collect build artifacts
