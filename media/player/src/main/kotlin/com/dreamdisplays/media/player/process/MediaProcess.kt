@@ -181,7 +181,9 @@ object MediaProcess {
 
     private fun startFfmpegProcess(command: List<String>): Process = ProcessBuilder(command).apply {
         if (isAndroid()) {
-            environment()["SSL_CERT_DIR"] = "/system/etc/security/cacerts"
+            environment().remove("SSL_CERT_FILE")
+            environment()["SSL_CERT_DIR"] =
+                "/apex/com.android.conscrypt/cacerts:/system/etc/security/cacerts"
         }
     }.start()
 
