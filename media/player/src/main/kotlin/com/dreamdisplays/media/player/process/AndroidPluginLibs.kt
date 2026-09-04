@@ -23,6 +23,9 @@ object AndroidPluginLibs {
     /** Absolute path to `libytdlp.so`, resolved from ffmpeg's own plugin lib directory. */
     fun ytdlpPath(): String? = siblingOf("libytdlp.so")
 
+    /** Absolute path to the CA bundle shipped beside the plugin binaries. */
+    fun caBundlePath(): String? = siblingOf("cacert.pem")
+
     private fun siblingOf(fileName: String): String? {
         val ffmpeg = ffmpegPath()?.let(::File) ?: return null
         val sibling = File(ffmpeg.parentFile, fileName)
