@@ -3,6 +3,7 @@ package com.dreamdisplays.media.player.process
 import com.dreamdisplays.api.security.policy.MediaHosts
 import com.dreamdisplays.media.player.pipeline.VideoFramePipe
 import com.dreamdisplays.media.runtime.security.MediaHostGuard
+import com.dreamdisplays.util.OsInfo
 import kotlinx.io.IOException
 import java.util.*
 import java.util.concurrent.TimeUnit
@@ -83,7 +84,7 @@ object MediaProcess {
         val args = videoArgs(ffmpeg, url, w, h, offsetNanos, hwAccel, VideoTransport.PPM, fps, alreadyResolved, seekByDecoding)
         if (ffmpeg == JavaCVProcess.SENTINEL)
             return JavaCVProcess.start(args, w, h, isAudio = false) ?: throw IOException("JavaCV video session failed to start")
-        return ProcessBuilder(args).start()
+        return startFfmpegProcess(args)
     }
 
     /** Builds full FFmpeg argv for video session emitting [transport] on stdout. Used by native pipeline directly. */
@@ -144,7 +145,7 @@ object MediaProcess {
             )
         }
         if (ffmpeg == JavaCVProcess.SENTINEL) return JavaCVProcess.start(cmd, w, h, isAudio = false) ?: throw IOException("JavaCV frame extract session failed to start")
-        return ProcessBuilder(cmd).start()
+        return startFfmpegProcess(cmd)
     }
 
     /**
@@ -161,7 +162,7 @@ object MediaProcess {
             addAll(listOf("-vn", "-f", "s16le", "-ar", sampleRate.toString(), "-ac", "2", "-"))
         }
         if (ffmpeg == JavaCVProcess.SENTINEL) return JavaCVProcess.start(cmd, 0, 0, isAudio = true) ?: throw IOException("JavaCV audio session failed to start")
-        return ProcessBuilder(cmd).start()
+        return startFfmpegProcess(cmd)
     }
 
     /** Builds `FFmpeg` process that decodes audio from MPEG-TS piped to stdin. */
@@ -175,8 +176,20 @@ object MediaProcess {
             "-vn", "-f", "s16le", "-ar", sampleRate.toString(), "-ac", "2", "-",
         )
         if (ffmpeg == JavaCVProcess.SENTINEL) return JavaCVProcess.start(cmd, 0, 0, isAudio = true) ?: throw IOException("JavaCV audio piped session failed to start")
-        return ProcessBuilder(cmd).start()
+        return startFfmpegProcess(cmd)
     }
+
+    private fun startFfmpegProcess(command: List<String>): Process = ProcessBuilder(command).apply {
+        if (isAndroid()) {
+            environment()["SSL_CERT_DIR"] = "/system/etc/security/cacerts"
+        }
+    }.start()
+
+    private fun isAndroid(): Boolean = OsInfo.isLinux && (
+        System.getProperty("os.version")?.contains("android", ignoreCase = true) == true ||
+            System.getenv("POJAV_NATIVEDIR") != null ||
+            System.getenv("POJAV_FFMPEG_PATH") != null
+        )
 
     /**
      * Closes the process's output stream and destroys it. Waits up to 1 second for graceful termination, then forcibly destroys if needed.
